@@ -1,16 +1,16 @@
 # KeyPipe
 
-A fast CLI tool for batch musical key and BPM detection. Detects keys using KeyNet CNN (Camelot notation) and BPM using madmom's RNN beat processor. Automatically renames files in Mixed In Key format.
+A fast CLI tool for batch musical key and BPM detection. Detects keys using KeyNet CNN (Camelot notation) and BPM using librosa beat tracking. Automatically renames files in Mixed In Key format.
 
 ## Features
 
 - **Key detection**: CNN-based key detection (~73.5% accuracy)
-- **BPM detection**: RNN-based tempo estimation via madmom (~77-88% accuracy)
+- **BPM detection**: Beat tracking tempo estimation via librosa
 - **Multi-format support**: MP3, WAV, FLAC, OGG, M4A, AIFF, and more
 - **Batch processing**: Recursively scan directories
 - **Parallel execution**: Process multiple files simultaneously
 - **Mixed In Key format**: `song.mp3` → `song - 4A - (128 bpm).mp3`
-- **Skip tagged files**: Automatically skips already-tagged files
+- **Smart overwrite**: Automatically replaces existing tags rather than double-appending
 - **GPU acceleration**: Optional CUDA support for key inference
 
 ## Installation
@@ -24,7 +24,6 @@ pip install -r requirements.txt
 - Python 3.8+
 - PyTorch 2.0+
 - `keynet.pt` model file (from MusicalKeyCNN)
-- madmom (for BPM detection)
 
 ## Usage
 
@@ -47,8 +46,8 @@ python -m keypipe --dry-run /path/to/music/
 # GPU acceleration (key detection)
 python -m keypipe --device cuda /path/to/music/
 
-# Re-tag files that already have tags
-python -m keypipe --overwrite /path/to/music/
+# Keep existing tags (skip re-detection for already-tagged files)
+python -m keypipe --no-overwrite /path/to/music/
 
 # Verbose output
 python -m keypipe -v /path/to/music/
@@ -58,7 +57,7 @@ python -m keypipe -v /path/to/music/
 
 | Flag | Description |
 |------|-------------|
-| `--bpm` | Detect BPM (requires madmom) |
+| `--bpm` | Detect BPM |
 | `--key` | Detect key (default if --bpm not specified) |
 | `--dry-run`, `-n` | Preview changes without renaming files |
 | `--device {cpu,cuda}` | Device for key inference (default: cpu) |
@@ -66,7 +65,7 @@ python -m keypipe -v /path/to/music/
 | `--model PATH`, `-m PATH` | Path to key model checkpoint |
 | `--min-bpm N` | Minimum BPM for detection (default: 55) |
 | `--max-bpm N` | Maximum BPM for detection (default: 215) |
-| `--overwrite` | Replace existing tags |
+| `--no-overwrite` | Keep existing tags, skip re-detection |
 | `--no-skip` | Process files even if already tagged |
 | `--verbose`, `-v` | Print each file as processed |
 | `--no-recursive` | Don't search subdirectories |
@@ -124,14 +123,9 @@ Minor (A)              Major (B)
 | KeyNet (this model) | ~73.5% |
 | Mixed In Key | ~86% |
 
-### BPM Detection (madmom)
+### BPM Detection (librosa)
 
-| Metric | Accuracy |
-|--------|----------|
-| Accuracy1 (strict, 4% tolerance) | ~77% |
-| Accuracy2 (allows octave errors) | ~88% |
-
-BPM detection uses madmom's RNNBeatProcessor, which is considered state-of-the-art for offline tempo estimation.
+BPM detection uses harmonic/percussive source separation (HPSS) to isolate the percussive signal, then derives per-frame tempo estimates via `librosa.feature.tempo` and takes the median across all frames. This is more robust than a single global estimate, especially on tracks with irregular rhythms or prominent harmonic content.
 
 ## License
 

@@ -6,7 +6,7 @@ Handles:
 - CQT spectrogram extraction
 - Model inference
 - Key detection
-- BPM detection (via madmom)
+- BPM detection (via librosa beat tracking)
 """
 
 from pathlib import Path
@@ -149,7 +149,7 @@ class KeyDetector:
 
 class BPMDetector:
     """
-    BPM detector using madmom's RNN beat processor.
+    BPM detector using librosa's beat tracking.
 
     Usage:
         detector = BPMDetector()
@@ -165,25 +165,13 @@ class BPMDetector:
             min_bpm: Minimum expected BPM (default: 55)
             max_bpm: Maximum expected BPM (default: 215)
         """
-        # Lazy import madmom to avoid import errors if not installed
-        try:
-            from madmom.features.beats import RNNBeatProcessor
-            from madmom.features.tempo import TempoEstimationProcessor
-            self._beat_processor = RNNBeatProcessor()
-            self._tempo_processor = TempoEstimationProcessor(
-                min_bpm=min_bpm,
-                max_bpm=max_bpm,
-                fps=100
-            )
-            self._available = True
-        except ImportError:
-            self._available = False
-            self._beat_processor = None
-            self._tempo_processor = None
+        self._min_bpm = min_bpm
+        self._max_bpm = max_bpm
+        self._available = True  # librosa is always available (required dependency)
 
     @property
     def available(self) -> bool:
-        """Check if madmom is available."""
+        """Check if BPM detection is available."""
         return self._available
 
     def detect(self, audio_path: Union[str, Path]) -> int:
@@ -195,26 +183,39 @@ class BPMDetector:
 
         Returns:
             BPM as integer (rounded)
-
-        Raises:
-            RuntimeError: If madmom is not installed
         """
-        if not self._available:
-            raise RuntimeError(
-                'madmom is not installed. Install with: pip install madmom'
-            )
+        # Load audio (use same sample rate as key detection for consistency)
+        y, sr = librosa.load(str(audio_path), sr=SAMPLE_RATE, mono=True)
 
-        # Process audio through RNN beat processor
-        beat_activations = self._beat_processor(str(audio_path))
+        # Isolate percussive component to reduce harmonic interference
+        _, y_perc = librosa.effects.hpss(y)
 
-        # Estimate tempo from beat activations
-        tempos = self._tempo_processor(beat_activations)
+        # Compute onset strength envelope from percussive signal
+        onset_env = librosa.onset.onset_strength(
+            y=y_perc, sr=sr, aggregate=np.median
+        )
 
-        # Return the strongest tempo estimate (first one)
-        if len(tempos) > 0:
-            return int(round(tempos[0][0]))
+        # Per-frame tempo estimates; median across frames is more robust than
+        # a single global estimate
+        start_bpm = (self._min_bpm + self._max_bpm) / 2
+        tempos = librosa.feature.tempo(
+            onset_envelope=onset_env,
+            sr=sr,
+            start_bpm=start_bpm,
+            aggregate=None,
+        )
+        tempo = float(np.median(tempos))
 
-        return 0
+        # Clamp to valid range
+        if tempo < self._min_bpm or tempo > self._max_bpm:
+            # Try to find a multiple/divisor that fits in range
+            for mult in [2.0, 0.5, 4.0, 0.25]:
+                adjusted = tempo * mult
+                if self._min_bpm <= adjusted <= self._max_bpm:
+                    tempo = adjusted
+                    break
+
+        return int(round(tempo))
 
     def detect_with_confidence(
         self,
@@ -228,21 +229,60 @@ class BPMDetector:
 
         Returns:
             Tuple of (bpm, confidence)
+
+        Note:
+            librosa doesn't provide a native confidence score,
+            so we estimate one based on beat regularity.
         """
-        if not self._available:
-            raise RuntimeError(
-                'madmom is not installed. Install with: pip install madmom'
-            )
+        # Load audio
+        y, sr = librosa.load(str(audio_path), sr=SAMPLE_RATE, mono=True)
 
-        beat_activations = self._beat_processor(str(audio_path))
-        tempos = self._tempo_processor(beat_activations)
+        # Isolate percussive component to reduce harmonic interference
+        _, y_perc = librosa.effects.hpss(y)
 
-        if len(tempos) > 0:
-            bpm = int(round(tempos[0][0]))
-            confidence = float(tempos[0][1])
-            return bpm, confidence
+        # Per-frame tempo estimates via percussive onset envelope
+        start_bpm = (self._min_bpm + self._max_bpm) / 2
+        onset_env = librosa.onset.onset_strength(
+            y=y_perc, sr=sr, aggregate=np.median
+        )
+        tempos = librosa.feature.tempo(
+            onset_envelope=onset_env,
+            sr=sr,
+            start_bpm=start_bpm,
+            aggregate=None,
+        )
+        tempo = float(np.median(tempos))
 
-        return 0, 0.0
+        # Beat frames for confidence estimation (use percussive signal)
+        _, beat_frames = librosa.beat.beat_track(
+            y=y_perc,
+            sr=sr,
+            start_bpm=tempo,
+        )
+
+        # Estimate confidence based on beat regularity
+        confidence = 0.0
+        if len(beat_frames) > 1:
+            beat_times = librosa.frames_to_time(beat_frames, sr=sr)
+            intervals = np.diff(beat_times)
+            if len(intervals) > 0:
+                # Confidence based on consistency of beat intervals
+                mean_interval = np.mean(intervals)
+                std_interval = np.std(intervals)
+                if mean_interval > 0:
+                    # Lower coefficient of variation = higher confidence
+                    cv = std_interval / mean_interval
+                    confidence = max(0.0, min(1.0, 1.0 - cv))
+
+        # Clamp to valid range
+        if tempo < self._min_bpm or tempo > self._max_bpm:
+            for mult in [2.0, 0.5, 4.0, 0.25]:
+                adjusted = tempo * mult
+                if self._min_bpm <= adjusted <= self._max_bpm:
+                    tempo = adjusted
+                    break
+
+        return int(round(tempo)), confidence
 
 
 def find_model_path(model_arg: Optional[str] = None) -> Path:
@@ -274,6 +314,7 @@ def find_model_path(model_arg: Optional[str] = None) -> Path:
     search_paths = [
         Path('./checkpoints/keynet.pt'),
         Path('./keynet.pt'),
+        Path(__file__).parent / 'checkpoints' / 'keynet.pt',  # Inside package
         Path(__file__).parent.parent / 'MusicalKeyCNN' / 'checkpoints' / 'keynet.pt',
         Path.home() / '.keypipe' / 'keynet.pt',
     ]

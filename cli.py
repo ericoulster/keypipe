@@ -36,7 +36,7 @@ def process_single_file(
     bpm_detector: Optional[BPMDetector] = None,
     dry_run: bool = False,
     skip_tagged: bool = True,
-    overwrite: bool = False
+    no_overwrite: bool = False
 ) -> Tuple[Path, Optional[str], Optional[int], Optional[Path], Optional[str]]:
     """
     Process a single audio file for key and/or BPM detection.
@@ -47,7 +47,7 @@ def process_single_file(
         bpm_detector: BPMDetector instance (None to skip BPM detection)
         dry_run: If True, don't actually rename
         skip_tagged: Skip files that already have tags
-        overwrite: Replace existing tags
+        no_overwrite: If True, keep existing tags instead of replacing them
 
     Returns:
         Tuple of (original_path, detected_key, detected_bpm, new_path, error_message)
@@ -65,32 +65,30 @@ def process_single_file(
         detect_key = key_detector is not None
         detect_bpm = bpm_detector is not None
 
-        # Skip if already tagged (unless overwrite)
-        if skip_tagged and not overwrite:
+        # Skip if already tagged and --no-overwrite is set
+        if skip_tagged and no_overwrite:
             key_skip = existing_key is not None if detect_key else True
             bpm_skip = existing_bpm is not None if detect_bpm else True
             if key_skip and bpm_skip:
                 return (filepath, existing_key, existing_bpm, None, 'skipped (already tagged)')
 
-        # Detect key if requested
-        if detect_key and (not existing_key or overwrite):
+        # Detect key if requested (re-detect unless --no-overwrite and tag exists)
+        if detect_key and (not existing_key or not no_overwrite):
             key = key_detector.detect(filepath)
         elif existing_key:
             key = existing_key
 
-        # Detect BPM if requested
-        if detect_bpm and (not existing_bpm or overwrite):
+        # Detect BPM if requested (re-detect unless --no-overwrite and tag exists)
+        if detect_bpm and (not existing_bpm or not no_overwrite):
             bpm = bpm_detector.detect(filepath)
         elif existing_bpm:
             bpm = existing_bpm
 
-        # Build new filename
-        if overwrite:
-            # Remove existing tags first
-            if existing_key:
-                working_path = remove_camelot_tag(working_path)
-            if existing_bpm:
-                working_path = remove_bpm_tag(working_path)
+        # Always strip existing tags before inserting to prevent double-appending
+        if existing_key:
+            working_path = remove_camelot_tag(working_path)
+        if existing_bpm:
+            working_path = remove_bpm_tag(working_path)
 
         # Insert new tags
         if key and bpm:
@@ -121,7 +119,7 @@ def run_batch(
     workers: int = 4,
     dry_run: bool = False,
     skip_tagged: bool = True,
-    overwrite: bool = False,
+    no_overwrite: bool = False,
     verbose: bool = False
 ) -> dict:
     """
@@ -134,7 +132,7 @@ def run_batch(
         workers: Number of parallel workers
         dry_run: Preview mode (no renaming)
         skip_tagged: Skip already-tagged files
-        overwrite: Replace existing tags
+        no_overwrite: Keep existing tags instead of replacing them
         verbose: Print each file as processed
 
     Returns:
@@ -167,7 +165,7 @@ def run_batch(
                 bpm_detector,
                 dry_run,
                 skip_tagged,
-                overwrite
+                no_overwrite
             ): path
             for path in paths
         }
@@ -240,7 +238,7 @@ Supported formats: ''' + ', '.join(AUDIO_EXTENSIONS)
     parser.add_argument(
         '--bpm',
         action='store_true',
-        help='Detect BPM (requires madmom)'
+        help='Detect BPM'
     )
 
     parser.add_argument(
@@ -292,9 +290,9 @@ Supported formats: ''' + ', '.join(AUDIO_EXTENSIONS)
     )
 
     parser.add_argument(
-        '--overwrite',
+        '--no-overwrite',
         action='store_true',
-        help='Overwrite existing tags in filenames'
+        help='Keep existing tags instead of replacing them'
     )
 
     parser.add_argument(
@@ -341,11 +339,8 @@ Supported formats: ''' + ', '.join(AUDIO_EXTENSIONS)
             sys.exit(1)
 
     if detect_bpm:
-        print('Initializing BPM detector (madmom)...')
+        print('Initializing BPM detector...')
         bpm_detector = BPMDetector(min_bpm=parsed.min_bpm, max_bpm=parsed.max_bpm)
-        if not bpm_detector.available:
-            print('Error: madmom is not installed. Install with: pip install madmom', file=sys.stderr)
-            sys.exit(1)
 
     # Find audio files
     print(f'Scanning: {parsed.path}')
@@ -373,7 +368,7 @@ Supported formats: ''' + ', '.join(AUDIO_EXTENSIONS)
         workers=parsed.workers,
         dry_run=parsed.dry_run,
         skip_tagged=not parsed.no_skip,
-        overwrite=parsed.overwrite,
+        no_overwrite=parsed.no_overwrite,
         verbose=parsed.verbose
     )
 

@@ -19,13 +19,13 @@ AUDIO_EXTENSIONS = (
 )
 
 # Camelot key pattern for detecting already-tagged files
-# Matches Mixed In Key format: "- 4A -" or "- 11B -" at end of filename
-# Also matches: "- 4A", "[4A]", "(11B)" for compatibility
+# Matches Mixed In Key format: "- 4A -" or "- 11B -" at end of filename,
+# or followed by a BPM tag: "- 4A - (128 bpm)"
 CAMELOT_PATTERN = re.compile(
-    r'[\s\-_]*[\[\(]?(\d{1,2}[ABab])[\]\)]?[\s\-_]*$'
+    r'[\s\-_]*[\[\(]?(\d{1,2}[ABab])[\]\)]?(?:[\s\-_]*$|[\s\-_]+(?=[\[\(]?\d{2,3}\s*[Bb][Pp][Mm]))'
 )
 
-# More specific pattern for Mixed In Key format: " - 4A - "
+# More specific pattern for Mixed In Key format: " - 4A - " (at end or before BPM)
 MIK_PATTERN = re.compile(
     r'\s-\s(\d{1,2}[ABab])\s-\s*$'
 )
@@ -183,9 +183,14 @@ def remove_camelot_tag(filepath: Path) -> Path:
     # Try Mixed In Key format first (" - 4A - ")
     new_stem = MIK_PATTERN.sub('', stem)
 
-    # If no change, try general pattern
+    # If no change, try general pattern — preserve ' - ' separator when a BPM tag follows
     if new_stem == stem:
-        new_stem = CAMELOT_PATTERN.sub('', stem)
+        def _replacer(m: re.Match) -> str:
+            rest = stem[m.end():]
+            if re.match(r'[\[\(]?\d{2,3}\s*[Bb][Pp][Mm]', rest):
+                return ' '
+            return ''
+        new_stem = CAMELOT_PATTERN.sub(_replacer, stem)
 
     new_stem = new_stem.rstrip(' -_')
 
