@@ -149,7 +149,7 @@ class KeyDetector:
 
 class BPMDetector:
     """
-    BPM detector using librosa's beat tracking.
+    BPM detector using essentia's RhythmExtractor2013.
 
     Usage:
         detector = BPMDetector()
@@ -165,14 +165,24 @@ class BPMDetector:
             min_bpm: Minimum expected BPM (default: 55)
             max_bpm: Maximum expected BPM (default: 215)
         """
+        from essentia.standard import RhythmExtractor2013
         self._min_bpm = min_bpm
         self._max_bpm = max_bpm
-        self._available = True  # librosa is always available (required dependency)
+        self._extractor = RhythmExtractor2013(
+            minTempo=min_bpm,
+            maxTempo=max_bpm,
+        )
+        self._available = True
 
     @property
     def available(self) -> bool:
         """Check if BPM detection is available."""
         return self._available
+
+    def _load_mono(self, audio_path: Union[str, Path]) -> np.ndarray:
+        """Load audio as mono float32 at 44100 Hz for essentia."""
+        y, _ = librosa.load(str(audio_path), sr=SAMPLE_RATE, mono=True)
+        return y.astype(np.float32)
 
     def detect(self, audio_path: Union[str, Path]) -> int:
         """
@@ -184,31 +194,12 @@ class BPMDetector:
         Returns:
             BPM as integer (rounded)
         """
-        # Load audio (use same sample rate as key detection for consistency)
-        y, sr = librosa.load(str(audio_path), sr=SAMPLE_RATE, mono=True)
-
-        # Isolate percussive component to reduce harmonic interference
-        _, y_perc = librosa.effects.hpss(y)
-
-        # Compute onset strength envelope from percussive signal
-        onset_env = librosa.onset.onset_strength(
-            y=y_perc, sr=sr, aggregate=np.median
-        )
-
-        # Per-frame tempo estimates; median across frames is more robust than
-        # a single global estimate
-        start_bpm = (self._min_bpm + self._max_bpm) / 2
-        tempos = librosa.feature.tempo(
-            onset_envelope=onset_env,
-            sr=sr,
-            start_bpm=start_bpm,
-            aggregate=None,
-        )
-        tempo = float(np.median(tempos))
+        audio = self._load_mono(audio_path)
+        bpm, _, _, _, _ = self._extractor(audio)
+        tempo = float(bpm)
 
         # Clamp to valid range
         if tempo < self._min_bpm or tempo > self._max_bpm:
-            # Try to find a multiple/divisor that fits in range
             for mult in [2.0, 0.5, 4.0, 0.25]:
                 adjusted = tempo * mult
                 if self._min_bpm <= adjusted <= self._max_bpm:
@@ -229,50 +220,17 @@ class BPMDetector:
 
         Returns:
             Tuple of (bpm, confidence)
-
-        Note:
-            librosa doesn't provide a native confidence score,
-            so we estimate one based on beat regularity.
         """
-        # Load audio
-        y, sr = librosa.load(str(audio_path), sr=SAMPLE_RATE, mono=True)
+        audio = self._load_mono(audio_path)
+        bpm, _, beats_confidence, _, _ = self._extractor(audio)
+        tempo = float(bpm)
 
-        # Isolate percussive component to reduce harmonic interference
-        _, y_perc = librosa.effects.hpss(y)
-
-        # Per-frame tempo estimates via percussive onset envelope
-        start_bpm = (self._min_bpm + self._max_bpm) / 2
-        onset_env = librosa.onset.onset_strength(
-            y=y_perc, sr=sr, aggregate=np.median
-        )
-        tempos = librosa.feature.tempo(
-            onset_envelope=onset_env,
-            sr=sr,
-            start_bpm=start_bpm,
-            aggregate=None,
-        )
-        tempo = float(np.median(tempos))
-
-        # Beat frames for confidence estimation (use percussive signal)
-        _, beat_frames = librosa.beat.beat_track(
-            y=y_perc,
-            sr=sr,
-            start_bpm=tempo,
-        )
-
-        # Estimate confidence based on beat regularity
-        confidence = 0.0
-        if len(beat_frames) > 1:
-            beat_times = librosa.frames_to_time(beat_frames, sr=sr)
-            intervals = np.diff(beat_times)
-            if len(intervals) > 0:
-                # Confidence based on consistency of beat intervals
-                mean_interval = np.mean(intervals)
-                std_interval = np.std(intervals)
-                if mean_interval > 0:
-                    # Lower coefficient of variation = higher confidence
-                    cv = std_interval / mean_interval
-                    confidence = max(0.0, min(1.0, 1.0 - cv))
+        # essentia returns per-beat confidence; aggregate to a single score
+        if len(beats_confidence) > 0:
+            confidence = float(np.mean(beats_confidence))
+            confidence = max(0.0, min(1.0, confidence))
+        else:
+            confidence = 0.0
 
         # Clamp to valid range
         if tempo < self._min_bpm or tempo > self._max_bpm:

@@ -245,7 +245,7 @@ def insert_bpm_in_filename(filepath: Path, bpm: int) -> Path:
     """
     stem = filepath.stem
     suffix = filepath.suffix
-    new_name = f'{stem} ({bpm} bpm){suffix}'
+    new_name = f'{stem} {bpm} bpm{suffix}'
     return filepath.parent / new_name
 
 
@@ -295,7 +295,7 @@ def insert_key_and_bpm_in_filename(
         parts.append(f' - {key} -')
 
     if bpm:
-        parts.append(f' ({bpm} bpm)')
+        parts.append(f' {bpm} bpm')
 
     new_name = ''.join(parts) + suffix
     return filepath.parent / new_name

@@ -5,11 +5,11 @@ A fast CLI tool for batch musical key and BPM detection. Detects keys using KeyN
 ## Features
 
 - **Key detection**: CNN-based key detection (~73.5% accuracy)
-- **BPM detection**: Beat tracking tempo estimation via librosa
+- **BPM detection**: Tempo estimation via essentia's RhythmExtractor2013
 - **Multi-format support**: MP3, WAV, FLAC, OGG, M4A, AIFF, and more
 - **Batch processing**: Recursively scan directories
 - **Parallel execution**: Process multiple files simultaneously
-- **Mixed In Key format**: `song.mp3` → `song - 4A - (128 bpm).mp3`
+- **Mixed In Key format**: `song.mp3` → `song - 4A - 128 bpm.mp3`
 - **Smart overwrite**: Automatically replaces existing tags rather than double-appending
 - **GPU acceleration**: Optional CUDA support for key inference
 
@@ -17,12 +17,12 @@ A fast CLI tool for batch musical key and BPM detection. Detects keys using KeyN
 
 ```bash
 cd keypipe
-pip install -r requirements.txt
+uv venv && uv pip install -e .
 ```
 
 **Requirements:**
 - Python 3.8+
-- PyTorch 2.0+
+- uv (recommended) or pip
 - `keynet.pt` model file (from MusicalKeyCNN)
 
 ## Usage
@@ -89,10 +89,10 @@ Files are renamed with key and/or BPM:
 song.mp3 → song - 4A - .mp3
 
 # BPM only
-song.mp3 → song (128 bpm).mp3
+song.mp3 → song 128 bpm.mp3
 
 # Both key and BPM
-song.mp3 → song - 4A - (128 bpm).mp3
+song.mp3 → song - 4A - 128 bpm.mp3
 ```
 
 ## Camelot Wheel Reference
@@ -123,9 +123,9 @@ Minor (A)              Major (B)
 | KeyNet (this model) | ~73.5% |
 | Mixed In Key | ~86% |
 
-### BPM Detection (librosa)
+### BPM Detection (essentia)
 
-BPM detection uses harmonic/percussive source separation (HPSS) to isolate the percussive signal, then derives per-frame tempo estimates via `librosa.feature.tempo` and takes the median across all frames. This is more robust than a single global estimate, especially on tracks with irregular rhythms or prominent harmonic content.
+BPM detection uses essentia's `RhythmExtractor2013`, which internally runs multiple beat tracking algorithms and votes across them. This provides best-in-class tempo estimation, particularly for electronic and DJ music.
 
 ## License
 
