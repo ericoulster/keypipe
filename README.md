@@ -123,9 +123,14 @@ Minor (A)              Major (B)
 | KeyNet (this model) | ~73.5% |
 | Mixed In Key | ~86% |
 
-### BPM Detection (essentia)
+### BPM Detection (ensemble)
 
-BPM detection uses essentia's `RhythmExtractor2013`, which internally runs multiple beat tracking algorithms and votes across them. This provides best-in-class tempo estimation, particularly for electronic and DJ music.
+BPM detection runs three algorithms in parallel and uses majority voting:
+- **PercivalBpmEstimator** (essentia) — autocorrelation with strict BPM bounds
+- **RhythmExtractor2013** (essentia) — multi-feature beat tracking
+- **librosa beat_track** — HPSS + onset strength with median voting
+
+If two or more algorithms agree within 3 BPM, their mean is used. This compensates for individual algorithm failure modes (half-time detection, harmonic interference, etc.).
 
 ## License
 

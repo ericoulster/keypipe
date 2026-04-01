@@ -20,20 +20,22 @@ AUDIO_EXTENSIONS = (
 
 # Camelot key pattern for detecting already-tagged files
 # Matches Mixed In Key format: "- 4A -" or "- 11B -" at end of filename,
-# or followed by a BPM tag: "- 4A - (128 bpm)"
+# or followed by a BPM value (with or without "bpm"): "- 4A - 128", "- 4A - (128 bpm)"
 CAMELOT_PATTERN = re.compile(
-    r'[\s\-_]*[\[\(]?(\d{1,2}[ABab])[\]\)]?(?:[\s\-_]*$|[\s\-_]+(?=[\[\(]?\d{2,3}\s*[Bb][Pp][Mm]))'
+    r'[\s\-_]*[\[\(]?(\d{1,2}[ABab])[\]\)]?(?:[\s\-_]*$|[\s\-_]+(?=[\[\(]?\d{2,3}(?:\s*[Bb][Pp][Mm])?))'
 )
 
-# More specific pattern for Mixed In Key format: " - 4A - " (at end or before BPM)
+# More specific pattern for Mixed In Key format: " - 4A - " (at end or before BPM value)
 MIK_PATTERN = re.compile(
-    r'\s-\s(\d{1,2}[ABab])\s-\s*$'
+    r'\s-\s(\d{1,2}[ABab])\s-\s*(?=$|\d{2,3})'
 )
 
 # BPM pattern for detecting already-tagged files
-# Matches formats like "(128 bpm)", "(128bpm)", "128 BPM", "[174 bpm]"
+# Matches: "(128 bpm)", "128 bpm", "128BPM", "[174 bpm]", or bare " - 128" / " 128" at end of stem
 BPM_PATTERN = re.compile(
     r'[\s\-_]*[\[\(]?(\d{2,3})\s*[Bb][Pp][Mm][\]\)]?[\s\-_]*'
+    r'|'
+    r'[\s\-_]+(\d{2,3})\s*$'
 )
 
 
@@ -183,11 +185,11 @@ def remove_camelot_tag(filepath: Path) -> Path:
     # Try Mixed In Key format first (" - 4A - ")
     new_stem = MIK_PATTERN.sub('', stem)
 
-    # If no change, try general pattern — preserve ' - ' separator when a BPM tag follows
+    # If no change, try general pattern — preserve separator when a BPM value follows
     if new_stem == stem:
         def _replacer(m: re.Match) -> str:
             rest = stem[m.end():]
-            if re.match(r'[\[\(]?\d{2,3}\s*[Bb][Pp][Mm]', rest):
+            if re.match(r'[\[\(]?\d{2,3}', rest):
                 return ' '
             return ''
         new_stem = CAMELOT_PATTERN.sub(_replacer, stem)
@@ -225,7 +227,7 @@ def has_bpm_tag(filepath: Path) -> Optional[int]:
     match = BPM_PATTERN.search(stem)
 
     if match:
-        return int(match.group(1))
+        return int(match.group(1) or match.group(2))
 
     return None
 
@@ -245,7 +247,7 @@ def insert_bpm_in_filename(filepath: Path, bpm: int) -> Path:
     """
     stem = filepath.stem
     suffix = filepath.suffix
-    new_name = f'{stem} {bpm} bpm{suffix}'
+    new_name = f'{stem} {bpm}{suffix}'
     return filepath.parent / new_name
 
 
@@ -295,7 +297,7 @@ def insert_key_and_bpm_in_filename(
         parts.append(f' - {key} -')
 
     if bpm:
-        parts.append(f' {bpm} bpm')
+        parts.append(f' {bpm}')
 
     new_name = ''.join(parts) + suffix
     return filepath.parent / new_name

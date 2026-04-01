@@ -84,11 +84,12 @@ def process_single_file(
         elif existing_bpm:
             bpm = existing_bpm
 
-        # Always strip existing tags before inserting to prevent double-appending
-        if existing_key:
-            working_path = remove_camelot_tag(working_path)
+        # Strip BPM first, then key — order matters because the key tag's
+        # trailing separator (" - ") is shared with the BPM value
         if existing_bpm:
             working_path = remove_bpm_tag(working_path)
+        if existing_key:
+            working_path = remove_camelot_tag(working_path)
 
         # Insert new tags
         if key and bpm:
