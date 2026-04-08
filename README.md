@@ -5,7 +5,7 @@ A fast CLI tool for batch musical key and BPM detection. Detects keys using KeyN
 ## Features
 
 - **Key detection**: CNN-based key detection (~73.5% accuracy)
-- **BPM detection**: Tempo estimation via essentia's RhythmExtractor2013
+- **BPM detection**: TempoCNN deep learning model via essentia
 - **Multi-format support**: MP3, WAV, FLAC, OGG, M4A, AIFF, and more
 - **Batch processing**: Recursively scan directories
 - **Parallel execution**: Process multiple files simultaneously
@@ -123,14 +123,11 @@ Minor (A)              Major (B)
 | KeyNet (this model) | ~73.5% |
 | Mixed In Key | ~86% |
 
-### BPM Detection (ensemble)
+### BPM Detection (TempoCNN)
 
-BPM detection runs three algorithms in parallel and uses majority voting:
-- **PercivalBpmEstimator** (essentia) — autocorrelation with strict BPM bounds
-- **RhythmExtractor2013** (essentia) — multi-feature beat tracking
-- **librosa beat_track** — HPSS + onset strength with median voting
+BPM detection uses the TempoCNN deep learning model (Schreiber & Müller, 2018/2019) via essentia. The CNN processes mel-band patches and outputs probability distributions over 256 BPM bins (30-286 BPM). Predictions are averaged across patches and the highest-probability bin within the requested range is selected.
 
-If two or more algorithms agree within 3 BPM, their mean is used. This compensates for individual algorithm failure modes (half-time detection, harmonic interference, etc.).
+Requires the `deepsquare-k16-3.pb` model file in `models/` or `~/.keypipe/`.
 
 ## License
 

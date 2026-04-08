@@ -149,10 +149,15 @@ class KeyDetector:
 
 class BPMDetector:
     """
-    Ensemble BPM detector using three algorithms with majority voting.
+    BPM detector using TempoCNN with onset-assisted correction.
 
-    Runs PercivalBpmEstimator, RhythmExtractor2013, and librosa beat_track
-    in parallel, then picks the tempo that at least two algorithms agree on.
+    Uses essentia's TensorflowPredictTempoCNN with the deepsquare-k16 model.
+    The CNN outputs per-patch probability distributions over 256 BPM bins
+    (30-286 BPM); we average across patches and take the weighted peak.
+
+    An onset autocorrelation step corrects borderline rounding errors:
+    when TempoCNN's raw float is far from the nearest integer (>0.3),
+    the onset-derived BPM acts as a tiebreaker for rounding direction.
 
     Usage:
         detector = BPMDetector()
@@ -160,7 +165,11 @@ class BPMDetector:
         print(bpm)  # e.g., 128
     """
 
-    AGREEMENT_TOLERANCE = 3  # BPM — two estimates within this count as agreeing
+    TEMPOCNN_SR = 11025  # TempoCNN expects 11025 Hz input
+    BPM_MIN_BIN = 30
+    BPM_MAX_BIN = 286
+    NUM_BINS = 256
+    _AUTOCORR_FS = 100  # impulse train sample rate for onset autocorrelation
 
     def __init__(self, min_bpm: int = 55, max_bpm: int = 215):
         """
@@ -170,19 +179,30 @@ class BPMDetector:
             min_bpm: Minimum expected BPM (default: 55)
             max_bpm: Maximum expected BPM (default: 215)
         """
-        from essentia.standard import PercivalBpmEstimator, RhythmExtractor2013
+        from essentia.standard import TensorflowPredictTempoCNN
         self._min_bpm = min_bpm
         self._max_bpm = max_bpm
-        self._percival = PercivalBpmEstimator(
-            minBPM=min_bpm,
-            maxBPM=max_bpm,
-            sampleRate=SAMPLE_RATE,
-        )
-        self._rhythm = RhythmExtractor2013(
-            minTempo=min_bpm,
-            maxTempo=max_bpm,
-        )
+
+        model_path = self._find_model()
+        self._predictor = TensorflowPredictTempoCNN(graphFilename=str(model_path))
+        self._bpm_bins = np.linspace(self.BPM_MIN_BIN, self.BPM_MAX_BIN, self.NUM_BINS)
         self._available = True
+
+    @staticmethod
+    def _find_model() -> Path:
+        """Find the TempoCNN model file."""
+        candidates = [
+            Path(__file__).parent.parent / 'models' / 'deepsquare-k16-3.pb',
+            Path(__file__).parent / 'models' / 'deepsquare-k16-3.pb',
+            Path.home() / '.keypipe' / 'deepsquare-k16-3.pb',
+        ]
+        for p in candidates:
+            if p.exists():
+                return p
+        raise FileNotFoundError(
+            'TempoCNN model not found. Place deepsquare-k16-3.pb in models/ '
+            'or ~/.keypipe/'
+        )
 
     @property
     def available(self) -> bool:
@@ -190,59 +210,130 @@ class BPMDetector:
         return self._available
 
     def _load_mono(self, audio_path: Union[str, Path]) -> np.ndarray:
-        """Load audio as mono float32 at 44100 Hz for essentia."""
+        """Load audio as mono float32 at 44100 Hz."""
         y, _ = librosa.load(str(audio_path), sr=SAMPLE_RATE, mono=True)
         return y.astype(np.float32)
 
-    def _clamp(self, tempo: float) -> float:
-        """Map tempo into the valid range via harmonic multiples."""
-        if self._min_bpm <= tempo <= self._max_bpm:
-            return tempo
-        for mult in [2.0, 0.5, 4.0, 0.25]:
-            adjusted = tempo * mult
-            if self._min_bpm <= adjusted <= self._max_bpm:
-                return adjusted
-        return tempo
+    def _weighted_peak(self, probs: np.ndarray) -> tuple:
+        """Find the peak BPM using a weighted average around the argmax.
 
-    def _run_percival(self, audio: np.ndarray) -> float:
-        return self._clamp(float(self._percival(audio)))
-
-    def _run_rhythm(self, audio: np.ndarray) -> float:
-        bpm, _, _, _, _ = self._rhythm(audio)
-        return self._clamp(float(bpm))
-
-    def _run_librosa(self, audio: np.ndarray) -> float:
-        _, y_perc = librosa.effects.hpss(audio)
-        onset_env = librosa.onset.onset_strength(
-            y=y_perc, sr=SAMPLE_RATE, aggregate=np.median
-        )
-        tempos = librosa.feature.tempo(
-            onset_envelope=onset_env,
-            sr=SAMPLE_RATE,
-            start_bpm=(self._min_bpm + self._max_bpm) / 2,
-            aggregate=None,
-        )
-        return self._clamp(float(np.median(tempos)))
-
-    def _vote(self, candidates: list) -> float:
-        """Pick the tempo that the most algorithms agree on.
-
-        Two values "agree" if they are within AGREEMENT_TOLERANCE BPM.
-        If a majority (2+) agree, return their mean.
-        Otherwise return the first candidate (Percival).
+        This gives sub-bin precision, which matters when the result is
+        later doubled/halved to correct for half-time detection.
         """
-        tol = self.AGREEMENT_TOLERANCE
-        best_group = []
-        for i, a in enumerate(candidates):
-            group = [a]
-            for j, b in enumerate(candidates):
-                if i != j and abs(a - b) <= tol:
-                    group.append(b)
-            if len(group) > len(best_group):
-                best_group = group
-        if len(best_group) >= 2:
-            return float(np.mean(best_group))
-        return candidates[0]
+        best_idx = int(np.argmax(probs))
+        # Weighted average over a ±1 bin window around the peak
+        lo = max(0, best_idx - 1)
+        hi = min(len(probs), best_idx + 2)
+        window_probs = probs[lo:hi]
+        window_bins = self._bpm_bins[lo:hi]
+        total = window_probs.sum()
+        if total > 0:
+            tempo = float(np.dot(window_probs, window_bins) / total)
+        else:
+            tempo = float(self._bpm_bins[best_idx])
+        confidence = float(probs[best_idx])
+        return tempo, confidence
+
+    def _predict_bpm_raw(self, audio_44k: np.ndarray) -> tuple:
+        """Run TempoCNN and return (raw_float_bpm, confidence).
+
+        Uses a weighted average around the probability peak for sub-bin
+        precision, then applies harmonic correction if outside range.
+        """
+        audio_11k = librosa.resample(
+            audio_44k, orig_sr=SAMPLE_RATE, target_sr=self.TEMPOCNN_SR
+        )
+        predictions = np.array(self._predictor(audio_11k))
+        if predictions.size == 0:
+            return 0.0, 0.0
+
+        avg = np.mean(predictions, axis=0)
+
+        mask = (self._bpm_bins >= self._min_bpm) & (self._bpm_bins <= self._max_bpm)
+        masked = avg.copy()
+        masked[~mask] = 0.0
+
+        if masked.sum() == 0:
+            tempo, confidence = self._weighted_peak(avg)
+            for mult in [2.0, 0.5, 4.0, 0.25]:
+                adjusted = tempo * mult
+                if self._min_bpm <= adjusted <= self._max_bpm:
+                    return adjusted, confidence
+            return tempo, confidence
+
+        return self._weighted_peak(masked)
+
+    def _onset_bpm(self, audio_44k: np.ndarray) -> Optional[float]:
+        """Derive BPM from onset positions via autocorrelation.
+
+        Builds an impulse train from detected onsets, autocorrelates it,
+        and finds the dominant periodicity in the BPM range.
+        Returns None if too few onsets are detected.
+        """
+        from essentia.standard import OnsetRate
+        onsets, _ = OnsetRate()(audio_44k)
+
+        if len(onsets) < 8:
+            return None
+
+        fs = self._AUTOCORR_FS
+        duration = onsets[-1] + 1.0
+        signal = np.zeros(int(duration * fs))
+        for t in onsets:
+            idx = int(t * fs)
+            if 0 <= idx < len(signal):
+                signal[idx] = 1.0
+
+        corr = np.correlate(signal, signal, mode='full')
+        corr = corr[len(corr) // 2:]
+
+        min_lag = int(60.0 / self._max_bpm * fs)
+        max_lag = int(60.0 / self._min_bpm * fs)
+        if max_lag >= len(corr):
+            max_lag = len(corr) - 1
+
+        search = corr[min_lag:max_lag + 1]
+        if len(search) == 0:
+            return None
+
+        best_lag = min_lag + int(np.argmax(search))
+        return 60.0 * fs / best_lag
+
+    def _correct_with_onset(self, tempocnn_raw: float, onset_est: Optional[float]) -> int:
+        """Use onset BPM to correct borderline TempoCNN rounding.
+
+        When TempoCNN's raw float is >0.3 from the nearest integer,
+        the onset estimate acts as a tiebreaker for floor vs ceil.
+        Skipped for half-time detections (raw < min_bpm) where onset
+        estimates are unreliable.
+        """
+        if onset_est is None or tempocnn_raw < self._min_bpm:
+            return int(round(tempocnn_raw))
+
+        tcnn_rounded = int(round(tempocnn_raw))
+
+        # Harmonically align onset estimate to TempoCNN's range
+        onset_aligned = onset_est
+        for mult in [1.0, 2.0, 0.5, 4.0, 0.25]:
+            candidate = onset_est * mult
+            if abs(candidate - tempocnn_raw) < 10:
+                onset_aligned = candidate
+                break
+
+        onset_rounded = int(round(onset_aligned))
+
+        if tcnn_rounded == onset_rounded:
+            return tcnn_rounded
+
+        tcnn_frac = abs(tempocnn_raw - tcnn_rounded)
+        if tcnn_frac < 0.3:
+            return tcnn_rounded
+
+        # TempoCNN is borderline — use onset as tiebreaker
+        if onset_rounded < tcnn_rounded:
+            return int(np.floor(tempocnn_raw))
+        else:
+            return int(np.ceil(tempocnn_raw))
 
     def detect(self, audio_path: Union[str, Path]) -> int:
         """
@@ -252,16 +343,12 @@ class BPMDetector:
             audio_path: Path to audio file
 
         Returns:
-            BPM as integer (rounded)
+            BPM as integer (rounded, with onset correction)
         """
         audio = self._load_mono(audio_path)
-        candidates = [
-            self._run_percival(audio),
-            self._run_rhythm(audio),
-            self._run_librosa(audio),
-        ]
-        tempo = self._vote(candidates)
-        return int(round(tempo))
+        tempo_raw, _ = self._predict_bpm_raw(audio)
+        onset_est = self._onset_bpm(audio)
+        return self._correct_with_onset(tempo_raw, onset_est)
 
     def detect_with_confidence(
         self,
@@ -270,11 +357,6 @@ class BPMDetector:
         """
         Detect BPM with confidence score.
 
-        Confidence is based on inter-algorithm agreement:
-        - 1.0: all three agree within tolerance
-        - 0.67: two agree
-        - 0.33: no agreement (single-algorithm fallback)
-
         Args:
             audio_path: Path to audio file
 
@@ -282,20 +364,9 @@ class BPMDetector:
             Tuple of (bpm, confidence)
         """
         audio = self._load_mono(audio_path)
-        candidates = [
-            self._run_percival(audio),
-            self._run_rhythm(audio),
-            self._run_librosa(audio),
-        ]
-        tempo = self._vote(candidates)
-        bpm = int(round(tempo))
-
-        # Count how many algorithms agree with the result
-        tol = self.AGREEMENT_TOLERANCE
-        agreeing = sum(1 for c in candidates if abs(c - tempo) <= tol)
-        confidence = agreeing / len(candidates)
-
-        return bpm, confidence
+        tempo_raw, confidence = self._predict_bpm_raw(audio)
+        onset_est = self._onset_bpm(audio)
+        return self._correct_with_onset(tempo_raw, onset_est), confidence
 
 
 def find_model_path(model_arg: Optional[str] = None) -> Path:
