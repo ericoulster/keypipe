@@ -15,9 +15,10 @@ dependencies = [
 
 [project.optional-dependencies]
 # BPM detection (TempoCNN + onset correction). No Windows wheels exist for
-# essentia; key detection works without this extra.
+# essentia; key detection works without this extra. essentia-tensorflow only:
+# it ships the same `essentia` package as plain essentia plus the TF
+# algorithms, and the two overwrite each other if both are installed.
 essentia = [
-    "essentia==2.1b6.dev1389",
     "essentia-tensorflow==2.1b6.dev1389",
 ]
 # Only needed by the benchmark scripts at the repo root, not the package.
