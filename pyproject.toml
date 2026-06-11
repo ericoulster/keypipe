@@ -1,0 +1,49 @@
+[project]
+name = "keypipe"
+version = "0.2.0"
+description = "A fast CLI tool for batch musical key and BPM detection"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+dependencies = [
+    "torch==2.11.0",
+    "librosa==0.11.0",
+    "soundfile==0.13.1",
+    "numpy==2.4.4",
+    "tqdm==4.67.3",
+]
+
+[project.optional-dependencies]
+# BPM detection (TempoCNN + onset correction). No Windows wheels exist for
+# essentia; key detection works without this extra.
+essentia = [
+    "essentia==2.1b6.dev1389",
+    "essentia-tensorflow==2.1b6.dev1389",
+]
+# Only needed by the benchmark scripts at the repo root, not the package.
+bench = [
+    "madmom>=0.16.1",
+    "scipy>=1.17.1",
+    "beat-this",
+    "vamp>=1.1.0",
+]
+
+[project.scripts]
+keypipe = "keypipe.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["keypipe"]
+# Model weights must ship in the wheel: keynet.pt (key detection) and
+# deepsquare-k16-3.pb (TempoCNN), resolved relative to the package dir.
+artifacts = ["*.pt", "*.pb"]
+
+[tool.uv.extra-build-dependencies]
+madmom = ["Cython", "numpy"]
+vamp = ["numpy"]
+
+[tool.uv.sources]
+beat-this = { url = "https://github.com/CPJKU/beat_this/archive/main.zip" }
