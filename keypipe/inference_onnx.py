@@ -108,11 +108,18 @@ class OnnxBPMDetector(BPMDetector):
         self._bpm_bins = np.linspace(self.BPM_MIN_BIN, self.BPM_MAX_BIN, self.NUM_BINS)
         self._available = True
 
+    # Peak-picking tuned on a 146-track stratified train split of the
+    # MIK-tagged library (onset_tuning.py, 2026-06-12); beat both the
+    # librosa defaults and the essentia OnsetRate reference on the
+    # held-out 147 tracks (119 vs 116 vs 117 octave-aware exact).
+    ONSET_PARAMS = dict(pre_max=3, post_max=10, pre_avg=100, post_avg=30,
+                        delta=0.0, wait=10)
+
     def _detect_onsets(self, audio_44k: np.ndarray) -> np.ndarray:
         import librosa
 
         from keypipe.inference import SAMPLE_RATE
 
         return librosa.onset.onset_detect(
-            y=audio_44k, sr=SAMPLE_RATE, units='time'
+            y=audio_44k, sr=SAMPLE_RATE, units='time', **self.ONSET_PARAMS
         )

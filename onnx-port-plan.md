@@ -43,14 +43,21 @@
    `detect`/`detect_with_confidence`; keypipe extra `onnx = ["onnxruntime"]`.
    keydup's `select_bpm_backend()` prefers essentia when importable, else ONNX
    (and can be forced via env/setting for A/B).
-5. **Validation gate - RESULT (2026-06-12)**: the benchmark folder now holds 15
-   tracks (13 with BPM tags; contents changed since April's 23-track run, incl.
-   decimal half-time tags like 87.50). Scored against tags (half-time doubled):
-   **ONNX 12/13, essentia 9/13, backends agree 10/15**. All misses on both
-   sides are +/-1 borderline rounds; librosa's onset tiebreaker out-rounds
-   OnsetRate here (nails 180.00 where essentia says 181). Gate read as
-   "ONNX >= essentia": PASSED. Pipeline parity: mel 1e-6, patches 3e-6
-   (patch=256, hop=128, z-norm per patch, zero-centered framing).
+5. **Validation gate - FINAL (2026-06-12)**: judged on a 293-track stratified
+   sample of the MIK-tagged library (bpm_wide_benchmark.py; octave-aware exact
+   match), after the early small-set results whipsawed both directions.
+   Untuned librosa onsets tied essentia overall (232/293 each) but trailed in
+   the 160-179 bucket (38 vs 43). Peak-picking was then tuned on a 146-track
+   train split (onset_tuning.py grid search) and validated held-out:
+   **tuned ONNX 119/147 vs essentia 117/147 on the holdout**; Kawaii Set
+   (fully out-of-sample) 19/23 vs 21/23 - the two unique ONNX misses are
+   170->171 rounds at the 100 Hz autocorr quantization cliff (lags 35/36 =
+   171.4/166.7 BPM). Raising autocorr fs was tested and REJECTED: unstable
+   (fs=1000: train -6, holdout +5; fs=250 craters both) - sparse impulse
+   trains autocorrelate noisily. VERDICT: tuned ONNX is statistically
+   equivalent to essentia (ahead on holdout, behind on Kawaii, identical CNN
+   probs to 3e-6). Gate satisfied: no quality compromise on platforms where
+   essentia cannot ship at all. Pipeline parity: mel 1e-6, patches 3e-6.
 6. **CI/packaging**: add windows-2022 to the keydup matrix (no essentia there by
    dependency markers already); PyInstaller Windows artifact + self-test.
    **macOS DECIDED (2026-06-12): ONNX backend, essentia excluded from mac

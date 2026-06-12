@@ -50,12 +50,14 @@ def onsets_to_bpm(onsets, det):
     signal = np.zeros(int((onsets[-1] + 1.0) * fs))
     idx = (onsets * fs).astype(int)
     signal[idx[(idx >= 0) & (idx < len(signal))]] = 1.0
-    corr = np.correlate(signal, signal, mode="full")[len(signal) - 1:]
     min_lag = int(60.0 / det._max_bpm * fs)
-    max_lag = min(int(60.0 / det._min_bpm * fs), len(corr) - 1)
+    max_lag = min(int(60.0 / det._min_bpm * fs), len(signal) - 1)
     if max_lag <= min_lag:
         return None
-    return 60.0 * fs / (min_lag + int(np.argmax(corr[min_lag:max_lag + 1])))
+    # identical to np.correlate(...)[mid:] over this lag window, but only
+    # computes the ~110 lags we actually search (grid-tuning hot path)
+    corr = np.array([signal[: len(signal) - lag] @ signal[lag:] for lag in range(min_lag, max_lag + 1)])
+    return 60.0 * fs / (min_lag + int(np.argmax(corr)))
 
 
 def octave_match(d, t):
@@ -105,7 +107,7 @@ def tune():
         score = evaluate(train, envs, det, params)
         results.append((score, params))
         if i % 50 == 0:
-            print(f"{i}/{len(combos)} best so far {max(results)[0]}", flush=True)
+            print(f"{i}/{len(combos)} best so far {max(r[0] for r in results)}", flush=True)
 
     results.sort(key=lambda x: -x[0])
     print("\ntop 5 on train:")
