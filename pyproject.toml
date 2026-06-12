@@ -21,6 +21,10 @@ dependencies = [
 essentia = [
     "essentia-tensorflow==2.1b6.dev1389",
 ]
+# TensorFlow-free BPM backend (works on Windows; one runtime next to torch)
+onnx = [
+    "onnxruntime>=1.20",
+]
 # Only needed by the benchmark scripts at the repo root, not the package.
 bench = [
     "madmom>=0.16.1",
@@ -40,7 +44,7 @@ build-backend = "hatchling.build"
 packages = ["keypipe"]
 # Model weights must ship in the wheel: keynet.pt (key detection) and
 # deepsquare-k16-3.pb (TempoCNN), resolved relative to the package dir.
-artifacts = ["*.pt", "*.pb"]
+artifacts = ["*.pt", "*.pb", "*.onnx", "*.npy"]
 
 [tool.uv.extra-build-dependencies]
 madmom = ["Cython", "numpy"]

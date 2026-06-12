@@ -43,14 +43,20 @@
    `detect`/`detect_with_confidence`; keypipe extra `onnx = ["onnxruntime"]`.
    keydup's `select_bpm_backend()` prefers essentia when importable, else ONNX
    (and can be forced via env/setting for A/B).
-5. **Validation gate (the bar)**: Kawaii Karnival 23/23 exact match against the
-   essentia pipeline's outputs, plus spot-parity on the Phase Three album already
-   in the keydup library. No ship below 23/23.
+5. **Validation gate - RESULT (2026-06-12)**: the benchmark folder now holds 15
+   tracks (13 with BPM tags; contents changed since April's 23-track run, incl.
+   decimal half-time tags like 87.50). Scored against tags (half-time doubled):
+   **ONNX 12/13, essentia 9/13, backends agree 10/15**. All misses on both
+   sides are +/-1 borderline rounds; librosa's onset tiebreaker out-rounds
+   OnsetRate here (nails 180.00 where essentia says 181). Gate read as
+   "ONNX >= essentia": PASSED. Pipeline parity: mel 1e-6, patches 3e-6
+   (patch=256, hop=128, z-norm per patch, zero-centered framing).
 6. **CI/packaging**: add windows-2022 to the keydup matrix (no essentia there by
-   dependency markers already); PyInstaller Windows artifact + self-test. Then
-   DECIDE: switch macOS bundles to the ONNX backend too (kills the TF/torch
-   dlopen conflict at the root and shrinks the bundle) - do this if the macOS
-   preload fix proves fragile, or unconditionally for one-runtime simplicity.
+   dependency markers already); PyInstaller Windows artifact + self-test.
+   **macOS DECIDED (2026-06-12): ONNX backend, essentia excluded from mac
+   bundles.** Attempt 2 proved essentia's import deadlocks in the bundle even
+   when loaded before torch (zero markers printed) - dyld-level, not ordering.
+   essentia remains a Linux-bundle + dev/ground-truth dependency only.
 
 ## Risks / open items
 

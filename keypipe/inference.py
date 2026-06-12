@@ -263,6 +263,12 @@ class BPMDetector:
 
         return self._weighted_peak(masked)
 
+    def _detect_onsets(self, audio_44k: np.ndarray) -> np.ndarray:
+        """Onset times in seconds (backend hook; essentia here)."""
+        from essentia.standard import OnsetRate
+        onsets, _ = OnsetRate()(audio_44k)
+        return np.asarray(onsets)
+
     def _onset_bpm(self, audio_44k: np.ndarray) -> Optional[float]:
         """Derive BPM from onset positions via autocorrelation.
 
@@ -270,8 +276,7 @@ class BPMDetector:
         and finds the dominant periodicity in the BPM range.
         Returns None if too few onsets are detected.
         """
-        from essentia.standard import OnsetRate
-        onsets, _ = OnsetRate()(audio_44k)
+        onsets = self._detect_onsets(audio_44k)
 
         if len(onsets) < 8:
             return None
