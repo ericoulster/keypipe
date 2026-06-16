@@ -18,6 +18,59 @@ AUDIO_EXTENSIONS = (
     '.wma', '.aiff', '.aif', '.opus', '.webm'
 )
 
+# No real track is this long; a header claiming more frames is corrupt
+# (e.g. FLACs whose STREAMINFO total-samples is the int64 "unknown"
+# sentinel 2**63-1, which makes soundfile try to allocate exabytes).
+_MAX_PLAUSIBLE_FRAMES = 10 ** 9  # ~6.3 hours at 44.1 kHz
+
+
+def _header_frames_bogus(path: str) -> bool:
+    """True if the container header reports an implausible frame count
+    (so we must decode by streaming instead of trusting it)."""
+    try:
+        import soundfile as sf
+        info = sf.info(path)
+    except Exception:
+        return False  # not an sf format; let librosa pick a backend
+    return info.frames <= 0 or info.frames > _MAX_PLAUSIBLE_FRAMES
+
+
+def _decode_with_audioread(path: str, sr: int):
+    """Header-agnostic streaming decode via ffmpeg/gstreamer."""
+    import audioread
+    import librosa
+    import numpy as np
+
+    with audioread.audio_open(path) as a:
+        native_sr, channels = a.samplerate, a.channels
+        raw = b"".join(a.read_data())
+    y = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0
+    if channels > 1:
+        y = y.reshape(-1, channels).mean(axis=1)
+    if native_sr != sr:
+        y = librosa.resample(y, orig_sr=native_sr, target_sr=sr)
+    return y.astype(np.float32)
+
+
+def load_audio_mono(path, sr: int):
+    """Load an audio file as mono float32 at ``sr``.
+
+    Normally uses librosa/soundfile; falls back to a streaming ffmpeg
+    decode when the file header is corrupt (bogus frame count) or
+    soundfile errors, so a single bad file analyzes instead of failing.
+    """
+    import librosa
+    import numpy as np
+
+    path = str(path)
+    if not _header_frames_bogus(path):
+        try:
+            y, _ = librosa.load(path, sr=sr, mono=True)
+            return y.astype(np.float32)
+        except Exception:
+            pass  # corrupt despite a plausible header -> stream-decode
+    return _decode_with_audioread(path, sr)
+
 # Camelot key pattern for detecting already-tagged files
 # Matches Mixed In Key format: "- 4A -" or "- 11B -" at end of filename,
 # or followed by a BPM value (with or without "bpm"): "- 4A - 128", "- 4A - (128 bpm)"

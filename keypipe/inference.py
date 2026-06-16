@@ -17,7 +17,7 @@ import torch
 import librosa
 
 from .model import KeyNet, load_model
-from .utils import index_to_camelot
+from .utils import index_to_camelot, load_audio_mono
 
 
 # Audio preprocessing constants (from MusicalKeyCNN)
@@ -64,8 +64,8 @@ class KeyDetector:
         Returns:
             Tensor of shape (1, 1, freq_bins, time_frames)
         """
-        # Load audio with librosa (handles resampling and mono conversion)
-        waveform_np, _ = librosa.load(str(audio_path), sr=SAMPLE_RATE, mono=True)
+        # Load audio (mono, resampled); tolerant of corrupt file headers
+        waveform_np = load_audio_mono(audio_path, SAMPLE_RATE)
 
         # Compute CQT spectrogram
         cqt = librosa.cqt(
@@ -210,9 +210,8 @@ class BPMDetector:
         return self._available
 
     def _load_mono(self, audio_path: Union[str, Path]) -> np.ndarray:
-        """Load audio as mono float32 at 44100 Hz."""
-        y, _ = librosa.load(str(audio_path), sr=SAMPLE_RATE, mono=True)
-        return y.astype(np.float32)
+        """Load audio as mono float32 at 44100 Hz (corrupt-header safe)."""
+        return load_audio_mono(audio_path, SAMPLE_RATE)
 
     def _weighted_peak(self, probs: np.ndarray) -> tuple:
         """Find the peak BPM using a weighted average around the argmax.
