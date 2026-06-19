@@ -66,8 +66,10 @@ class KeyDetector:
         """
         # Load audio (mono, resampled); tolerant of corrupt file headers
         waveform_np = load_audio_mono(audio_path, SAMPLE_RATE)
+        return self._spec_tensor(waveform_np)
 
-        # Compute CQT spectrogram
+    def _spec_tensor(self, waveform_np: np.ndarray) -> torch.Tensor:
+        """CQT log-spectrogram tensor for a mono waveform array."""
         cqt = librosa.cqt(
             waveform_np,
             sr=SAMPLE_RATE,
@@ -76,19 +78,19 @@ class KeyDetector:
             bins_per_octave=BINS_PER_OCTAVE,
             fmin=FMIN
         )
-
-        # Convert to magnitude and apply log scaling
-        spec = np.abs(cqt)
-        spec = np.log1p(spec)
-
-        # Remove last two frequency bins (as in original MusicalKeyCNN)
+        spec = np.log1p(np.abs(cqt))
+        # Remove last two time frames (as in original MusicalKeyCNN)
         spec = spec[:, :-2] if spec.shape[1] > 2 else spec
-
-        # Convert to tensor with batch and channel dimensions
         spec_tensor = torch.tensor(spec, dtype=torch.float32)
-        spec_tensor = spec_tensor.unsqueeze(0).unsqueeze(0)  # (1, 1, freq, time)
+        return spec_tensor.unsqueeze(0).unsqueeze(0)  # (1, 1, freq, time)
 
-        return spec_tensor
+    def _key_of_array(self, waveform_np: np.ndarray) -> tuple:
+        """(camelot, confidence) for a mono waveform array."""
+        spec = self._spec_tensor(waveform_np).to(self.device)
+        with torch.no_grad():
+            probs = torch.softmax(self.model(spec), dim=1)[0]
+        idx = int(probs.argmax().cpu().item())
+        return index_to_camelot(idx), float(probs[idx].cpu().item())
 
     def predict_index(self, spec_tensor: torch.Tensor) -> int:
         """
@@ -145,6 +147,95 @@ class KeyDetector:
             confidence = float(probs[0, pred_idx].cpu().item())
 
         return index_to_camelot(pred_idx), confidence
+
+    def detect_segments(
+        self,
+        audio_path: Union[str, Path],
+        window_s: float = 30.0,
+        hop_s: float = 15.0,
+        conf_floor: float = 0.35,
+        min_segment_s: float = 45.0,
+    ) -> list:
+        """Per-section key detection for tracks that modulate.
+
+        Slides a window across the track, detects a key per window, then
+        collapses the sequence into segments: weak windows (below
+        ``conf_floor``) inherit the previous confident key, runs of the
+        same key merge, and segments shorter than ``min_segment_s`` are
+        absorbed into a neighbour - so breakdowns don't read as key
+        changes. Returns a list of dicts with start_s/end_s/key/confidence.
+        A single-key track yields one segment.
+        """
+        y = load_audio_mono(audio_path, SAMPLE_RATE)
+        duration = len(y) / SAMPLE_RATE
+        windows = []
+        t = 0.0
+        while t < duration:
+            chunk = y[int(t * SAMPLE_RATE):int((t + window_s) * SAMPLE_RATE)]
+            if len(chunk) < SAMPLE_RATE * 5:  # ignore a tiny trailing sliver
+                break
+            key, conf = self._key_of_array(chunk)
+            windows.append((t, min(t + window_s, duration), key, conf))
+            t += hop_s
+        if not windows:
+            return []
+        return self._collapse_windows(windows, conf_floor, min_segment_s)
+
+    @staticmethod
+    def _collapse_windows(windows: list, conf_floor: float, min_segment_s: float) -> list:
+        # weak windows inherit the last confident key (don't invent keys)
+        cleaned = []
+        last_key = None
+        for start, end, key, conf in windows:
+            if conf < conf_floor and last_key is not None:
+                cleaned.append((start, end, last_key, conf))
+            else:
+                cleaned.append((start, end, key, conf))
+                last_key = key
+
+        # merge consecutive equal keys into runs
+        runs = []
+        for start, end, key, conf in cleaned:
+            if runs and runs[-1]["key"] == key:
+                runs[-1]["end_s"] = end
+                runs[-1]["_confs"].append(conf)
+            else:
+                runs.append({"start_s": start, "end_s": end, "key": key, "_confs": [conf]})
+
+        # absorb too-short runs into the longer adjacent run
+        changed = True
+        while changed and len(runs) > 1:
+            changed = False
+            for i, run in enumerate(runs):
+                if run["end_s"] - run["start_s"] >= min_segment_s:
+                    continue
+                neighbours = [r for r in (runs[i - 1] if i > 0 else None,
+                                          runs[i + 1] if i + 1 < len(runs) else None) if r]
+                target = max(neighbours, key=lambda r: r["end_s"] - r["start_s"])
+                target["start_s"] = min(target["start_s"], run["start_s"])
+                target["end_s"] = max(target["end_s"], run["end_s"])
+                target["_confs"].extend(run["_confs"])
+                runs.pop(i)
+                changed = True
+                break
+
+        # re-merge any now-adjacent equal keys, finalize confidence
+        merged = []
+        for run in runs:
+            if merged and merged[-1]["key"] == run["key"]:
+                merged[-1]["end_s"] = run["end_s"]
+                merged[-1]["_confs"].extend(run["_confs"])
+            else:
+                merged.append(run)
+        return [
+            {
+                "start_s": round(r["start_s"], 1),
+                "end_s": round(r["end_s"], 1),
+                "key": r["key"],
+                "confidence": round(sum(r["_confs"]) / len(r["_confs"]), 3),
+            }
+            for r in merged
+        ]
 
 
 class BPMDetector:
