@@ -41,3 +41,30 @@ n=3 spike (0.49/0.49 vs 0.73) that did not hold at n=60.
 before shipping. Next-phase cohort + measurement plan in
 `key_change_validation_plan.md` (blocked on Eric adding an SSD; pending datasets:
 GiantSteps Key, Isophonics, scaled-split library tags, synthetic splices, SWD).
+
+## 2026-06-19 (later) — Neighbour-aware collapse: tried, MEASURED, insufficient
+
+Live library had ~126 tracks auto-flagged multi-key; precision ~12% (only the
+dual-tagged ones plausibly real). Added `are_harmonic_neighbors` + rewrote
+`_collapse_windows` so neighbour wobble (relative / +-1) collapses and a key
+change needs sustained evidence (distant: min_run=2 windows; neighbour:
+min_run_neighbor=4). Synthetic unit cases all pass (wobble collapses, sustained
++1 outro survives, distant survives).
+
+**But on REAL audio it barely helped: only 12/120 false alarms cleared, 108
+still flagged.** Root cause (diagnostic, not fixable by collapse): KeyNet
+produces DIFFERENT keys for different SECTIONS of a *single-key* track —
+sustained blocks, not rapid wobble — because sections emphasise different
+chords. Of 114 still-flagged: 34 neighbour-only, **80 contain a distant
+transition** (e.g. a 5A-tagged track segmented 8B+5B — just the detector being
+wrong differently across the track). Dropping neighbour modulations entirely
+would clear only 34 more and would discard genuine sustained neighbour
+modulations, which are **indistinguishable** from single-key section-colouring
+with this detector.
+
+**Conclusion:** local key segmentation is bottlenecked on PER-WINDOW DETECTOR
+QUALITY, not collapse heuristics. No smoothing rescues it. This is the concrete
+motivation for the better-detector research (deep-research running 2026-06-19).
+Recommend: disable auto key-change flagging in keydup (it's ~90% wrong), keep
+detect_segments for on-demand/future, revisit when a higher-accuracy /
+better-calibrated per-window key detector is available.
