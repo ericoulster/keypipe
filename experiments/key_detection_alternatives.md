@@ -82,6 +82,45 @@ genre-specific retraining.**
 - madmom is attractive (probability output) but **broken on our py3.12/numpy2**
   stack — non-trivial to actually use.
 
+## Verified follow-up on the two interesting models (2026-06-19, live sources)
+
+**KeyMyna** (github.com/echo-cipher/keymyna, arXiv 2604.10021):
+- Two-stage: "Myna" base (ViT-S/16 ~22M, mel-spectrogram, 90%-token masking,
+  contrastive) extracts embeddings; "KeyMyna" is a shallow MLP head on the
+  FROZEN embeddings. Myna-Vertical (128x2 patches) is the pitch-sensitive
+  variant; 22M-Hybrid (16x16 + 128x2) is best.
+- 75.91% weighted / 72.02% exact GiantSteps (SOTA, +1.3 over KeyNet).
+- **License: NOT stated in repo; under anonymous peer review → license-unknown,
+  CANNOT ship.** Weights on Google Drive but they are the **MLP head only**,
+  operating on **pre-extracted Myna embedding pickles, not raw audio** — so
+  integration needs the Myna base weights (HF oriyonay/myna-vertical) + the head
+  + an embedding pipeline. Two-stage, more work, legal blocker, +1.3pt gain.
+  VERDICT: not worth it.
+
+**S-KEY** (github.com/deezer/skey, arXiv 2501.12907, ICASSP 2025):
+- ChromaNet (equivariant CNN on CQT), self-supervised label-free via CPSD loss
+  on pitch-transposed same-track segments; extends STONE with an auxiliary
+  chroma-pseudo-label task that cracks the relative major/minor distinction
+  STONE couldn't do (directly our neighbour-confusion problem).
+- ~72-73% weighted — PARITY with KeyNet, NOT better.
+- **License: MIT (CONFIRMED at repo) → cleanest of anything here.** Weights SHIP
+  in repo (skey/models/skey.pt, single file). **Takes raw audio directly**
+  (wav/mp3 via torchaudio) — single-stage, clean. PyTorch + poetry.
+- VERDICT: no accuracy gain as a drop-in, BUT it's the unique **retraining
+  substrate**: MIT + label-free + raw-audio means we can SELF-SUPERVISED
+  RETRAIN it on our own doujin library (validate on the 415 filename tags) to
+  fix the out-of-distribution problem — the only path with real headroom.
+
+## Ensemble reality-check (user's prior, confirmed by our own data)
+
+The user's past TempoCNN ensemble FAILED (plan.md Approach 3: majority vote
+17/23 < best single 18/23, "bad models outvote the good one"). That prior is
+well-founded HERE too: an ensemble needs a gating signal to know which model to
+trust per-track, and we already proved we DON'T have one (confidence AUC 0.54).
+Combining KeyNet (74%) with edma (68%) without a reliable arbiter regresses
+toward the weaker model — exactly their failure mode. **De-prioritise the
+ensemble** unless a usable per-track confidence/agreement signal is found first.
+
 ## Bottom line
 
 Stop looking for a more accurate KeyNet — there isn't one worth the integration
