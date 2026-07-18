@@ -27,6 +27,13 @@ HOP_LENGTH = 8820
 BINS_PER_OCTAVE = 24
 FMIN = 65  # Hz
 
+# KeyNet's three MaxPool2d(2) stages collapse the time axis; below ~8
+# frames (~1.6 s) the last pool produces a zero-width output and the
+# forward pass raises. Tile short clips up to this floor so samples,
+# stems and loops get a (necessarily lower-confidence) key instead of a
+# crash. Full tracks are far longer and never hit this path.
+MIN_TIME_FRAMES = 16
+
 
 class KeyDetector:
     """
@@ -81,6 +88,14 @@ class KeyDetector:
         spec = np.log1p(np.abs(cqt))
         # Remove last two time frames (as in original MusicalKeyCNN)
         spec = spec[:, :-2] if spec.shape[1] > 2 else spec
+        n_time = spec.shape[1]
+        if n_time == 0:
+            raise ValueError("audio too short to analyze (no spectrogram frames)")
+        if n_time < MIN_TIME_FRAMES:
+            # tile (not zero-pad): repeating the clip's content keeps a real
+            # periodic signal for the CNN rather than injecting silence
+            reps = -(-MIN_TIME_FRAMES // n_time)  # ceil division
+            spec = np.tile(spec, (1, reps))[:, :MIN_TIME_FRAMES]
         spec_tensor = torch.tensor(spec, dtype=torch.float32)
         return spec_tensor.unsqueeze(0).unsqueeze(0)  # (1, 1, freq, time)
 

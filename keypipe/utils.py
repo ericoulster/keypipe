@@ -35,16 +35,42 @@ def _header_frames_bogus(path: str) -> bool:
     return info.frames <= 0 or info.frames > _MAX_PLAUSIBLE_FRAMES
 
 
+class AudioDecodeError(ValueError):
+    """A file could not be decoded to audio (corrupt, truncated, an
+    unsupported codec, or simply not an audio file). Carries a
+    human-readable reason so callers can surface it directly."""
+
+
 def _decode_with_audioread(path: str, sr: int):
     """Header-agnostic streaming decode via ffmpeg/gstreamer."""
     import audioread
     import librosa
     import numpy as np
 
-    with audioread.audio_open(path) as a:
-        native_sr, channels = a.samplerate, a.channels
-        raw = b"".join(a.read_data())
+    try:
+        with audioread.audio_open(path) as a:
+            native_sr, channels = a.samplerate, a.channels
+            raw = b"".join(a.read_data())
+    except audioread.exceptions.NoBackendError as exc:
+        # every backend rejected it - not decodable audio on this system
+        raise AudioDecodeError(
+            "no decoder could read this file (unsupported codec, corrupt, "
+            "or not an audio file)"
+        ) from exc
+
+    # a backend opened it but the stream is unusable: a corrupt container
+    # can report sr/channels of 0, and junk (e.g. an HTML page saved with an
+    # audio extension) decodes to no samples. Guard before librosa.resample,
+    # which divides by the rate and raised ZeroDivisionError here.
+    if native_sr <= 0 or channels <= 0:
+        raise AudioDecodeError(
+            f"invalid audio stream (sample rate {native_sr}, {channels} channels)"
+        )
     y = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0
+    if y.size == 0:
+        raise AudioDecodeError(
+            "no audio samples decoded (the file may be truncated or not audio)"
+        )
     if channels > 1:
         y = y.reshape(-1, channels).mean(axis=1)
     if native_sr != sr:
